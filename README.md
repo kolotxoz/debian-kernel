@@ -1,1 +1,1 @@
-Clon del kernel chrultrabook para construir el kernel 6.6.103
+Clon del kernel chrultrabook para construir el kernel 6.6.106
