@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="6.6.135"
+VERSION="6.6.138"
 
 ROOT="$PWD"
 TARBALL="linux-${VERSION}.tar.xz"
