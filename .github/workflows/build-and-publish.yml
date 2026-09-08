@@ -1,0 +1,20 @@
+      - name: Detectar última versión de la rama 6.6.x
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            LATEST="${{ github.event.inputs.version }}"
+          else
+            LATEST=$(curl -s https://www.kernel.org/releases.json | jq -r '.releases[] | select(.version | startswith("6.6.")) | .version')
+          fi
+          if [ -z "$LATEST" ]; then
+            echo "No se encontró ninguna versión 6.6.x activa en kernel.org (puede que la rama haya llegado a EOL)." >&2
+            exit 1
+          fi
+          CURRENT=$(grep -oP 'VERSION="\K[^"]+' build.sh)
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST" = "$CURRENT" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
