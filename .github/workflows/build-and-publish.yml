@@ -1,3 +1,41 @@
+name: Build kernel and publish APT repo
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Forzar una versión de kernel concreta (opcional)"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kernel-build-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar dependencias
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses-dev dwarves patch curl xz-utils kmod \
+            fakeroot rsync ca-certificates git jq reprepro gnupg
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Detectar última versión de la rama 6.6.x
         id: version
         run: |
@@ -7,7 +45,7 @@
             LATEST=$(curl -s https://www.kernel.org/releases.json | jq -r '.releases[] | select(.version | startswith("6.6.")) | .version')
           fi
           if [ -z "$LATEST" ]; then
-            echo "No se encontró ninguna versión 6.6.x activa en kernel.org (puede que la rama haya llegado a EOL)." >&2
+            echo "No se encontró ninguna versión 6.6.x activa en kernel.org." >&2
             exit 1
           fi
           CURRENT=$(grep -oP 'VERSION="\K[^"]+' build.sh)
@@ -18,3 +56,73 @@
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Actualizar VERSION en build.sh
+        if: steps.version.outputs.build == 'true'
+        run: sed -i "s/^VERSION=.*/VERSION=\"${{ steps.version.outputs.latest }}\"/" build.sh
+
+      - name: Compilar kernel
+        if: steps.version.outputs.build == 'true'
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Bootstrap del repo APT (gh-pages) si no existe
+        if: steps.version.outputs.build == 'true'
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          if git ls-remote --exit-code --heads \
+              https://github.com/${{ github.repository }}.git gh-pages > /dev/null 2>&1; then
+            echo "La rama gh-pages ya existe."
+          else
+            echo "Creando gh-pages desde cero..."
+            mkdir -p /tmp/gh-pages-init/conf
+            cd /tmp/gh-pages-init
+            git init -q -b gh-pages
+            cat > conf/distributions <<EOF
+          Origin: kolotxoz
+          Label: Custom Debian Kernel
+          Codename: kernel
+          Architectures: amd64
+          Components: main
+          Description: Kernels personalizados compilados automáticamente
+          SignWith: ${GPG_KEY_ID}
+          EOF
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add conf/distributions
+            git commit -q -m "Bootstrap del repositorio APT"
+            git remote add origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            git push -q origin gh-pages
+          fi
+
+      - name: Incluir el .deb en el repo APT
+        if: steps.version.outputs.build == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          git clone --branch gh-pages https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /tmp/gh-pages
+          reprepro -b /tmp/gh-pages includedeb kernel *.deb
+          gpg --armor --export "${GPG_KEY_ID}" > /tmp/gh-pages/pubkey.gpg
+
+      - name: Publicar cambios en gh-pages
+        if: steps.version.outputs.build == 'true'
+        run: |
+          cd /tmp/gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Añade kernel ${{ steps.version.outputs.latest }} al repo APT"
+          git push origin gh-pages
+
+      - name: Confirmar bump de versión en build.sh
+        if: steps.version.outputs.build == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build.sh
+          git commit -m "Actualiza kernel a ${{ steps.version.outputs.latest }}"
+          git push origin ${{ github.ref_name }}
