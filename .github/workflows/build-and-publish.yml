@@ -19,22 +19,18 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: debian:bookworm
     steps:
-      - name: Checkout repo
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 5120
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+
+      - name: Check out
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Instalar dependencias
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses-dev dwarves patch curl xz-utils kmod \
-            fakeroot rsync ca-certificates git jq reprepro gnupg
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Detectar última versión de la rama 6.6.x
         id: version
@@ -49,13 +45,23 @@ jobs:
             exit 1
           fi
           CURRENT=$(grep -oP 'VERSION="\K[^"]+' build.sh)
+          echo "Versión actual en build.sh: $CURRENT"
+          echo "Última versión 6.6.x en kernel.org: $LATEST"
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
           if [ "$LATEST" = "$CURRENT" ]; then
+            echo "No hay versión nueva, se omite la compilación."
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
+            echo "Hay versión nueva, se procederá a compilar."
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Instalar dependencias
+        if: steps.version.outputs.build == 'true'
+        run: |
+          sudo apt update
+          sudo apt install -y git build-essential ncurses-dev xz-utils libssl-dev bc flex libelf-dev bison binutils debhelper jq reprepro gnupg
 
       - name: Actualizar VERSION en build.sh
         if: steps.version.outputs.build == 'true'
@@ -63,9 +69,7 @@ jobs:
 
       - name: Compilar kernel
         if: steps.version.outputs.build == 'true'
-        run: |
-          chmod +x build.sh
-          ./build.sh
+        run: bash build.sh
 
       - name: Bootstrap del repo APT (gh-pages) si no existe
         if: steps.version.outputs.build == 'true'
