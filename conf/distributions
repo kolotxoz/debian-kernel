@@ -1,0 +1,7 @@
+Origin: kolotxoz
+Label: Custom Debian Kernel
+Codename: kernel
+Architectures: amd64
+Components: main
+Description: Kernels personalizados compilados automáticamente
+SignWith: 581B6C85AF32A753
